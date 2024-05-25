@@ -76,6 +76,8 @@ solar_capacity = model.addVar(vtype=GRB.CONTINUOUS, name="solar_capacity")
 initial_storage_energy = 50  # 初始储能能量
 efficiency_charge = 0.95  # 充电效率
 efficiency_discharge = 0.95  # 放电效率
+soc_min = 0.1 * storage_capacity  # 最小充电状态
+soc_max = 0.9 * storage_capacity  # 最大充电状态
 purchase_cost = 1  # 购电成本
 pv_cost = 0.4  # 光伏发电成本
 wind_cost = 0.5  # 风电发电成本

@@ -74,6 +74,8 @@ initial_storage_energy = 50  # 初始储能能量
 storage_capacity = 100  # 储能容量
 storage_power = 50  # 储能功率
 efficiency = 0.95  # 储能效率
+soc_min = 0.1 * storage_capacity  # 最小充电状态
+soc_max = 0.9 * storage_capacity  # 最大充电状态
 purchase_cost = 1  # 购电成本
 pv_cost = 0.4  # 光伏发电成本
 wind_cost = 0.5  # 风电发电成本
@@ -120,6 +122,7 @@ if model.status == GRB.OPTIMAL:
     print(f'Optimal objective: {model.objVal}')
     for t in range(time_steps):
         print(f'Time {t}: Purchase: {purchase[t].x}, Curtailment: {curtailment[t].x}, Storage Charge: {storage_charge[t].x}, Storage Discharge: {storage_discharge[t].x}, Storage Energy: {storage_energy[t].x}')
+        print('')
 else:
     print('No optimal solution found.')
 

@@ -126,31 +126,144 @@ def analyze_without_storage(load_col, gen_col, purchase_cost, generation_cost):
     return purchase, excess_generation, total_cost, avg_cost
 
 
-def storage_operation(row, previous_soc, load_col, gen_col):
+def storage_operation(row, previous_soc, load_col, gen_col, generation_cost):
     """
     储能运行策略
     """
     
     load = row[load_col]
+    
     if isinstance(gen_col, list):
-        generation = sum(row[col] for col in gen_col)
+        # 分开处理光伏和风电发电
+        pv_generation = combined_data[gen_col[0]]
+        wind_generation = combined_data[gen_col[1]]
+        pv_cost = generation_cost[0]
+        wind_cost = generation_cost[1]
+
+        total_generation = pv_generation + wind_generation
+        
+        net_load = load - total_generation
+        
+        if net_load > 0:
+            # 需要从储能放电
+            charge = 0
+            discharge = min(storage_power, net_load / efficiency, previous_soc - soc_min)
+            new_soc = previous_soc - discharge
+            net_load -= discharge * efficiency
+        
+        else:
+            # 需要给储能充电
+            discharge = 0
+            charge = min(storage_power, -net_load * efficiency, soc_max - previous_soc)
+
+            remaining_net_load = net_load
+            
+            # 先使用光伏发电充电
+            if pv_generation - load > 0:
+                charge_pv = min(storage_power, -remaining_net_load * charge_efficiency, soc_max - previous_soc, pv_generation)
+                new_soc = previous_soc + charge_pv
+                remaining_net_load += charge_pv / charge_efficiency
+            else:
+                charge_pv = 0
+            
+            charge - wind_generation
+            
+            # 如果光伏发电不足，再使用风电充电
+            if remaining_net_load < 0 and wind_generation > 0:
+                charge_wind = min(storage_power, -remaining_net_load * charge_efficiency, soc_max - new_soc, wind_generation)
+                new_soc += charge_wind
+                remaining_net_load += charge_wind / charge_efficiency
+            else:
+                charge_wind = 0
+            
+            charge = charge_pv + charge_wind
+            
+            new_soc = previous_soc + charge
+            net_load += charge / efficiency
+        
+        
+        # 优先使用光伏发电
+        used_pv_generation = pv_generation.copy()
+        used_pv_generation[used_pv_generation > load] = load[used_pv_generation > load]
+        remaining_load = load - used_pv_generation
+
+        # 使用风电发电补充
+        used_wind_generation = wind_generation.copy()
+        used_wind_generation[used_wind_generation > remaining_load] = remaining_load[used_wind_generation > remaining_load]
+        remaining_load -= used_wind_generation
+
+        # 总的实际使用发电量
+        total_used_generation = used_pv_generation + used_wind_generation
+
+        # 弃风弃光量
+        # excess_pv_generation = pv_generation - used_pv_generation
+        # excess_wind_generation = wind_generation - used_wind_generation
+        # excess_generation = excess_pv_generation + excess_wind_generation
+
+        # 实际用电成本
+        total_generation_cost = (used_pv_generation * pv_cost).sum() + (used_wind_generation * wind_cost).sum()
+
     else:
-        generation = row[gen_col]
-    net_load = load - generation
-    if net_load > 0:
-        # 需要从储能放电
-        charge = 0
-        discharge = min(storage_power, net_load / efficiency, previous_soc - soc_min)
-        new_soc = previous_soc - discharge
-        net_load -= discharge * efficiency
-    else:
-        # 需要给储能充电
-        discharge = 0
-        charge = min(storage_power, -net_load * efficiency, soc_max - previous_soc)
-        new_soc = previous_soc + charge
-        net_load += charge / efficiency
+        total_generation = combined_data[gen_col]
+        used_generation = total_generation.copy()
+        used_generation[used_generation > load] = load[used_generation > load]
+        remaining_load = load - used_generation
+
+        # excess_generation = total_generation - used_generation
+        # excess_generation[excess_generation < 0] = 0
+
+        total_used_generation = used_generation
+        total_generation_cost = (total_used_generation * generation_cost).sum()
+    
+    
+
+
         
     return new_soc, net_load, discharge, charge
+
+
+# def storage_operation(row, previous_soc, load_col, pv_col, wind_col):
+#     """
+#     储能运行策略
+#     """
+    
+#     load = row[load_col]
+#     pv_generation = row[pv_col]
+#     wind_generation = row[wind_col]
+    
+#     # 计算净负荷
+#     net_load = load - pv_generation - wind_generation
+    
+#     if net_load > 0:
+#         # 需要从储能放电
+#         charge = 0
+#         discharge = min(storage_power, net_load / discharge_efficiency, previous_soc - soc_min)
+#         new_soc = previous_soc - discharge
+#         net_load -= discharge * discharge_efficiency
+#     else:
+#         # 需要给储能充电
+#         discharge = 0
+#         remaining_net_load = net_load
+        
+#         # 先使用光伏发电充电
+#         if pv_generation > 0:
+#             charge_pv = min(storage_power, -remaining_net_load * charge_efficiency, soc_max - previous_soc, pv_generation)
+#             new_soc = previous_soc + charge_pv
+#             remaining_net_load += charge_pv / charge_efficiency
+#         else:
+#             charge_pv = 0
+        
+#         # 如果光伏发电不足，再使用风电充电
+#         if remaining_net_load < 0 and wind_generation > 0:
+#             charge_wind = min(storage_power, -remaining_net_load * charge_efficiency, soc_max - new_soc, wind_generation)
+#             new_soc += charge_wind
+#             remaining_net_load += charge_wind / charge_efficiency
+#         else:
+#             charge_wind = 0
+        
+#         charge = charge_pv + charge_wind
+        
+#     return new_soc, net_load, discharge, charge
 
 
 def analyze_with_storage(park, load_col, gen_col, purchase_cost, generation_cost):
@@ -171,33 +284,72 @@ def analyze_with_storage(park, load_col, gen_col, purchase_cost, generation_cost
             previous_soc = xInitial_storage
 
         else:
-            previous_soc = combined_data.at[i-1, 'SOC (kWh)']
+            previous_soc = combined_data.at[i-1, f'园区{park}_SOC (kWh)']
         new_soc, net_load, discharge, charge = storage_operation(combined_data.iloc[i], previous_soc, load_col, gen_col)
-        combined_data.at[i, 'SOC (kWh)'] = new_soc
+        combined_data.at[i, f'园区{park}_SOC (kWh)'] = new_soc
         combined_data.at[i, f'{park}净负荷(kW)'] = net_load
         combined_data.at[i, f'{park}放电(kWh)'] = -discharge
         combined_data.at[i, f'{park}充电(kWh)'] = charge
 
     # 经济性分析
     load = combined_data[load_col]
+    
     if isinstance(gen_col, list):
-        generation = combined_data[gen_col[0]] + combined_data[gen_col[1]]
-        total_generation_cost = (combined_data[gen_col[0]] * generation_cost[0] + combined_data[gen_col[1]] * generation_cost[1]).sum()
+        # 分开处理光伏和风电发电
+        pv_generation = combined_data[gen_col[0]]
+        wind_generation = combined_data[gen_col[1]]
+        pv_cost = generation_cost[0]
+        wind_cost = generation_cost[1]
+
+        total_generation = pv_generation + wind_generation
+
+        # 优先使用光伏发电
+        used_pv_generation = pv_generation.copy()
+        used_pv_generation[used_pv_generation > load] = load[used_pv_generation > load]
+        remaining_load = load - used_pv_generation
+
+        # 使用风电发电补充
+        used_wind_generation = wind_generation.copy()
+        used_wind_generation[used_wind_generation > remaining_load] = remaining_load[used_wind_generation > remaining_load]
+        remaining_load -= used_wind_generation
+
+        # 总的实际使用发电量
+        total_used_generation = used_pv_generation + used_wind_generation
+
+        # 弃风弃光量
+        # excess_pv_generation = pv_generation - used_pv_generation
+        # excess_wind_generation = wind_generation - used_wind_generation
+        # excess_generation = excess_pv_generation + excess_wind_generation
+
+        # 实际用电成本
+        total_generation_cost = (used_pv_generation * pv_cost).sum() + (used_wind_generation * wind_cost).sum()
+
     else:
-        generation = combined_data[gen_col]
-        total_generation_cost = (generation * generation_cost).sum()
+        total_generation = combined_data[gen_col]
+        used_generation = total_generation.copy()
+        used_generation[used_generation > load] = load[used_generation > load]
+        remaining_load = load - used_generation
+
+        # excess_generation = total_generation - used_generation
+        # excess_generation[excess_generation < 0] = 0
+
+        total_used_generation = used_generation
+        total_generation_cost = (total_used_generation * generation_cost).sum()
+        
+        
     net_load = combined_data[f'{park}净负荷(kW)']
     purchase = net_load
     purchase[purchase < 0] = 0  # Set negative values to zero, as excess generation is not sold
-    excess_generation = generation - load - combined_data[f'{park}充电(kWh)']  # 弃电量要变化
+    excess_generation = total_generation - load - combined_data[f'{park}充电(kWh)']  # 弃电量要变化
     excess_generation[excess_generation < 0] = 0  # Set negative values to zero
+    
     total_purchase_cost = (purchase * purchase_cost).sum()
-    total_cost = total_purchase_cost + total_generation_cost
+    total_cost = total_purchase_cost + total_generation_cost + (storage_power * 800 + storage_capacity * 1800)/365*0.1295
     avg_cost = total_cost / load.sum()
     
     return (purchase, excess_generation,
                                 total_cost, avg_cost,
-                                combined_data['SOC (kWh)'],
+                                combined_data[f'园区{park}_SOC (kWh)'],
                                 combined_data[f'{park}净负荷(kW)'],
                                 combined_data[f'{park}放电(kWh)'],
                                 combined_data[f'{park}充电(kWh)'])
@@ -352,6 +504,8 @@ def picture12(combined_data):
     ax0.plot(combined_data['时间（h）'], combined_data['园区A_SOC(kWh)']/storage_capacity, label='Example Curve', color='green', marker='o')
     ax0.set_ylim(0, 1)
     ax0.set_ylabel('SOC (0-1)')
+    ax0.tick_params(axis='y', which='major', labelsize=tick_labelsize)  # 调整刻度标签字体大小
+
     
     ax0.legend(loc='upper right')
     
@@ -375,11 +529,12 @@ def picture12(combined_data):
         bar.set_alpha(0.7)
         
     # 创建次坐标轴
-    ax1 = axes[0].twinx()
+    ax1 = axes[1].twinx()
     ax1.plot(combined_data['时间（h）'], combined_data['园区B_SOC(kWh)']/storage_capacity, label='Example Curve', color='green', marker='o')
     ax1.set_ylim(0, 1)
     ax1.set_ylabel('SOC (0-1)')
-    
+    ax1.tick_params(axis='y', which='major', labelsize=tick_labelsize)  # 调整刻度标签字体大小
+
     ax1.legend(loc='upper right')
     
     # 绘制园区C的数据
@@ -408,7 +563,8 @@ def picture12(combined_data):
     ax2.plot(combined_data['时间（h）'], combined_data['园区C_SOC(kWh)']/storage_capacity, label='Example Curve', color='green', marker='o')
     ax2.set_ylim(0, 1)
     ax2.set_ylabel('SOC (0-1)')
-    
+    ax2.tick_params(axis='y', which='major', labelsize=tick_labelsize)  # 调整刻度标签字体大小
+
     ax2.legend(loc='upper right')
 
     
@@ -421,9 +577,9 @@ def picture13(combined_data):
     """
     
     """
-    
+
     # 创建子图
-    fig, axes = plt.subplots(3, 1, figsize=(15, 15), sharex=True)
+    fig, axes = plt.subplots(1, 1, figsize=(15, 12), sharex=True)
     
     # 定义柱状图的宽度和透明度
     bar_width = 0.7
@@ -435,35 +591,19 @@ def picture13(combined_data):
     legend_fontsize = 22
     tick_labelsize = 20
     
-    # 绘制园区A的数据
-    axes[0].bar(combined_data['时间（h）'], combined_data['园区A购电量(kW)'], width=bar_width, bottom= -combined_data['园区A购电量(kW)'], label='Park A Purchase (kW)', color='orange', alpha=alpha)
-    axes[0].bar(combined_data['时间（h）'], combined_data['园区A弃电量(kW)'], width=bar_width, label='Park A Excess (kW)', color='gray', alpha=alpha)
-    
-    axes[0].set_title('Park A Load and PV Output', fontsize=title_fontsize)
-    axes[0].set_ylabel('Power (kW)', fontsize=label_fontsize)
-    axes[0].legend(loc='upper right', fontsize=legend_fontsize)
-    axes[0].tick_params(axis='both', which='major', labelsize=tick_labelsize)  # 调整刻度标签字体大小
-
-    
-    # 绘制园区B的数据
-    axes[1].bar(combined_data['时间（h）'], combined_data['园区B购电量(kW)'], width=bar_width, bottom= -combined_data['园区B购电量(kW)'], label='Park B Purchase (kW)', color='orange', alpha=alpha)
-    axes[1].bar(combined_data['时间（h）'], combined_data['园区B弃电量(kW)'], width=bar_width, label='Park B Excess (kW)', color='gray', alpha=alpha)
-    
-    axes[1].set_title('Park B Load and Wind Output', fontsize=title_fontsize)
-    axes[1].set_ylabel('Power (kW)', fontsize=label_fontsize)
-    axes[1].legend(loc='upper right', fontsize=legend_fontsize)
-    axes[1].tick_params(axis='both', which='major', labelsize=tick_labelsize)  # 调整刻度标签字体大小
-
     
     # 绘制园区C的数据
-    axes[2].bar(combined_data['时间（h）'], combined_data['园区C购电量(kW)'], width=bar_width, bottom= -combined_data['园区C购电量(kW)'], label='Park C Purchase (kW)', color='orange', alpha=alpha)
-    axes[2].bar(combined_data['时间（h）'], combined_data['园区C弃电量(kW)'], width=bar_width, label='Park C Excess (kW)', color='gray', alpha=alpha)
+    axes.bar(combined_data['时间（h）'], combined_data['联合园区光伏出力(kW)'], width=bar_width, label='Park C PV Output (kW)', color='lightpink', alpha=alpha)
+    axes.bar(combined_data['时间（h）'], combined_data['联合园区风电出力(kW)'], width=bar_width, bottom= combined_data['联合园区光伏出力(kW)'], label='Park C Wind Output (kW)', color='skyblue', alpha=alpha)
+    axes.bar(combined_data['时间（h）'], combined_data['联合园区负荷(kW)'], width=bar_width, label='Park C Load (kW)', edgecolor='black', facecolor='none', linewidth=2, linestyle = '--')
+    axes.bar(combined_data['时间（h）'], combined_data['联合园区购电量(kW)'], width=bar_width, bottom= combined_data['联合园区光伏出力(kW)']+combined_data['联合园区风电出力(kW)'], label='Park C Purchase (kW)', color='orange', alpha=alpha)
+    axes.bar(combined_data['时间（h）'], combined_data['联合园区弃电量(kW)'], width=bar_width, bottom = -combined_data['联合园区弃电量(kW)'], label='Park C Excess (kW)', color='gray', alpha=alpha)
     
-    axes[2].set_title('Park C Load and PV/Wind Output', fontsize=title_fontsize)
-    axes[2].set_xlabel('Time (h)', fontsize=label_fontsize)
-    axes[2].set_ylabel('Power (kW)', fontsize=label_fontsize)
-    axes[2].legend(loc='upper right', fontsize=legend_fontsize)
-    axes[2].tick_params(axis='both', which='major', labelsize=tick_labelsize)  # 调整刻度标签字体大小
+    axes.set_title('Park C Load and PV/Wind Output', fontsize=title_fontsize)
+    axes.set_xlabel('Time (h)', fontsize=label_fontsize)
+    axes.set_ylabel('Power (kW)', fontsize=label_fontsize)
+    axes.legend(loc='upper right', fontsize=legend_fontsize)
+    axes.tick_params(axis='both', which='major', labelsize=tick_labelsize)  # 调整刻度标签字体大小
 
     
     # 调整布局
@@ -487,7 +627,7 @@ combined_data['园区A弃电量(kW)'] = park_A_result_without_storage[1]
 combined_data['园区B弃电量(kW)'] = park_B_result_without_storage[1]
 combined_data['园区C弃电量(kW)'] = park_C_result_without_storage[1]
 
-picture11(combined_data)
+# picture11(combined_data)
 
 
 
@@ -525,13 +665,32 @@ combined_data['园区A_充放电(kWh)'] = combined_data[['园区A_放电(kWh)', 
 combined_data['园区B_充放电(kWh)'] = combined_data[['园区B_放电(kWh)', '园区B_充电(kWh)']].sum(axis=1)
 combined_data['园区C_充放电(kWh)'] = combined_data[['园区C_放电(kWh)', '园区C_充电(kWh)']].sum(axis=1)
 
-picture12(combined_data)
+# picture12(combined_data)
 
-# # 打印各园区的分析结果
-# print_results("Park A", park_A_result_without_storage, park_A_result_with_storage)
-# print_results("Park B", park_B_result_without_storage, park_B_result_with_storage)
-# print_results("Park C", park_C_result_without_storage, park_C_result_with_storage)
+# 打印各园区的分析结果
+print("Park A")
+print(park_A_result_without_storage[2])
+print(park_A_result_with_storage[2])
 
+print("Park B")
+print(park_B_result_without_storage[2])
+print(park_B_result_with_storage[2])
+
+print("Park C")
+print(park_C_result_without_storage[2])
+print(park_C_result_with_storage[2])
+
+print("Park A")
+print(park_A_result_without_storage[3])
+print(park_A_result_with_storage[3])
+
+print("Park B")
+print(park_B_result_without_storage[3])
+print(park_B_result_with_storage[3])
+
+print("Park C")
+print(park_C_result_without_storage[3])
+print(park_C_result_with_storage[3])
 
 # # 解释各园区的经济性变化原因
 # explain_results("Park A", park_A_result_without_storage, park_A_result_with_storage)
@@ -548,5 +707,12 @@ joint_result_without_storage = analyze_without_storage(
     [0.4, 0.5]
 )
 
+combined_data['联合园区购电量(kW)'] = joint_result_without_storage[0]
+combined_data['联合园区弃电量(kW)'] = joint_result_without_storage[1]
 
-picture13(combined_data)
+joint_purchase = joint_result_without_storage[0].sum()
+joint_excess_generation = joint_result_without_storage[1].sum()
+joint_total_cost = joint_result_without_storage[2]
+joint_avg_cost = joint_result_without_storage[3]
+
+# picture13(combined_data)
