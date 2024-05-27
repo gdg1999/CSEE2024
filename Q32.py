@@ -103,7 +103,7 @@ def OptModel(modelCase, combined_data, park):
     month_num = 12
     
     # cost for renewable energy
-    Gain = 50
+    Gain = 500
     
     # 创建变量
     storage_charge = model.addVars(time_steps, month_num, vtype=GRB.BINARY, name="storage_charge")
@@ -161,8 +161,8 @@ def OptModel(modelCase, combined_data, park):
             else:
                 model.addConstr(storage_energy[t,m] == storage_energy[t-1,m] + storage_power_charge[t,m] * efficiency_charge - storage_power_discharge[t,m] / efficiency_discharge)
     
-            model.addConstr(Cost_energy[t,m] == Gain*(load - storage_power_discharge[t,m] - Pv_used[t,m] - Pw_used[t,m]))
-    
+            # model.addConstr(Cost_energy[t,m] == Gain*(load - storage_power_discharge[t,m] - Pv_used[t,m] - Pw_used[t,m]))
+            model.addConstr(Cost_energy[t,m] == Gain*(load - Pv_used[t,m] - Pw_used[t,m]))
     
         # 初始和终端储能状态约束
         model.addConstr(storage_energy[0,0] == initial_storage_energy*storage_capacity)
@@ -306,10 +306,10 @@ def picture23(combined_data, m, park, storage_capacity, wind_capacity, solar_cap
     
     if park == '联合':
         park = 'Joint'
-        axes.set_title(f'Park {park}', fontsize=title_fontsize)
+        axes.set_title(f'M{m}_Park {park}', fontsize=title_fontsize)
         park = '联合'
     else:
-        axes.set_title(f'Park {park}', fontsize=title_fontsize)
+        axes.set_title(f'M{m}_Park {park}', fontsize=title_fontsize)
     
     axes.set_xlabel('Time (h)', fontsize=label_fontsize)
     axes.set_ylabel('Power (kW)', fontsize=label_fontsize)
